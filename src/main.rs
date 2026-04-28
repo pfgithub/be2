@@ -3,10 +3,44 @@ fn main() {
 }
 
 mod reactive {
-    use std::hash::Hash;
+    use std::{hash::Hash, ops::Deref};
 
-    struct Reactive<T: PartialEq + Hash> {
+    struct Reactive<T> {
         current: T,
+    }
+    impl<T: Copy> Reactive<T> {
+        fn new(value: T) -> Reactive<T> {
+            Reactive::<T> { current: value }
+        }
+        fn update(&mut self, value: T) {
+            self.current = value;
+        }
+        fn view(&self, viewer: ReactiveViewer) -> T {
+            // needs to register
+            self.current
+        }
+    }
+    impl<T: Copy> Deref for Reactive<T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.current
+        }
+    }
+    struct ReactiveViewer {}
+
+    mod tests {
+        use super::*;
+
+        fn test_one() -> () {
+            let mut counter = Reactive::<f64>::new(0.0);
+            counter.update(1.0);
+            let viewer = ReactiveViewer {};
+            println!("counter is: {}", counter.view(viewer));
+            // viewer.check(); // false
+            counter.update(2.0);
+            // viewer.check(); // true
+            println!("counter is: {}", *counter);
+        }
     }
 }
 
@@ -66,6 +100,12 @@ mod retained_ui {
             root.borrow_mut().render();
         }
     }
+    // button component:
+    // - click handler
+    // - focus handler
+    // mouse event handling:
+    // - components post their event handlers into a big list, cut as needed by clip components
+    // - then we search that list to find the targets and trigger them
 
     // a component sized with the parent specifying the container boundary sizes
     // we could have others for one where it needs to know its size eg
