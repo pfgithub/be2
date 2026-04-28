@@ -41,27 +41,156 @@ VList( reactive_static [
 */
 
 mod retained_ui {
+    use std::{
+        cell::RefCell,
+        rc::{Rc, Weak},
+    };
+
     use super::*;
+    use util::*;
 
-    trait Component {}
+    #[cfg(test)]
+    mod tests {
+        use super::*;
 
-    struct Scrollable {
-        child: Box<dyn Component>,
+        #[test]
+        fn test_one() -> () {
+            let root = HVList::new(HV::V);
+            root.borrow_mut()
+                .add_item(ListItemSize::Fit, HVList::new(HV::H));
+            root.borrow_mut().size(ComponentParentSize {
+                size: Vector::<2, Option<f32>> {
+                    items: [Some(1.0), Some(2.0)],
+                },
+            });
+            root.borrow_mut().render();
+        }
     }
+
+    // a component sized with the parent specifying the container boundary sizes
+    // we could have others for one where it needs to know its size eg
+    trait Sizable1 {
+        fn size(&mut self, parent_size: ComponentParentSize) -> ComponentResolvedSize {
+            todo!();
+        }
+    }
+    trait EguiRenderable {
+        fn render(&mut self) -> () {}
+    }
+    trait Component1: Sizable1 + EguiRenderable {
+        fn get_component<'a>(&'a mut self) -> &'a mut Component;
+    }
+
+    struct ComponentParentSize {
+        size: Vector<2, Option<f32>>,
+    }
+    struct ComponentResolvedSize {
+        size: Vector<2, f32>,
+    }
+
+    struct Component {
+        parent: Option<Weak<RefCell<dyn Component1>>>,
+    }
+    impl Component {
+        fn new() -> Component {
+            Component { parent: None }
+        }
+        fn request_resize(&mut self) -> () {
+            if let Some(parent_weak) = &self.parent {
+                if let Some(parent) = parent_weak.upgrade() {
+                    parent.borrow_mut().get_component().request_resize();
+                }
+            }
+        }
+    }
+
     struct HVList {
+        component: Component,
+
         direction: HV,
         items: Vec<ListItem>,
     }
+    impl HVList {
+        fn new(direction: HV) -> Rc<RefCell<HVList>> {
+            Rc::new(RefCell::new(HVList {
+                component: Component::new(),
+                direction,
+                items: vec![],
+            }))
+        }
+        fn add_item(&mut self, size: ListItemSize, item: Rc<RefCell<dyn Component1>>) {
+            self.items.push(ListItem { size, item });
+        }
+    }
+    impl Sizable1 for HVList {}
+    impl EguiRenderable for HVList {}
+    impl Component1 for HVList {
+        fn get_component<'a>(&'a mut self) -> &'a mut Component {
+            &mut self.component
+        }
+    }
     struct ZStack {
-        items: Vec<Box<dyn Component>>,
+        component: Component,
+
+        items: Vec<ZStackItem>,
+    }
+    impl Sizable1 for ZStack {}
+    impl EguiRenderable for ZStack {}
+    impl Component1 for ZStack {
+        fn get_component<'a>(&'a mut self) -> &'a mut Component {
+            &mut self.component
+        }
+    }
+    struct ZStackItem {
+        component: Component,
+
+        value: Rc<RefCell<dyn Component1>>,
+        sizing: ZStackItemSizing,
+    }
+    enum ZStackItemSizing {
+        Leader,
+        Follower,
     }
     struct Clickable {
+        component: Component,
+
         // takes up the full size. use a vstack.
         mask: ClickableMask,
         callback: Box<dyn FnMut(MouseEvent)>,
     }
+    impl Sizable1 for Clickable {}
+    impl EguiRenderable for Clickable {}
+    impl Component1 for Clickable {
+        fn get_component<'a>(&'a mut self) -> &'a mut Component {
+            &mut self.component
+        }
+    }
     struct Focusable {
+        component: Component,
+
         callback: Box<dyn FnMut(FocusEvent)>,
+    }
+    impl Sizable1 for Focusable {}
+    impl EguiRenderable for Focusable {}
+    impl Component1 for Focusable {
+        fn get_component<'a>(&'a mut self) -> &'a mut Component {
+            &mut self.component
+        }
+    }
+    struct Scrollable {
+        component: Component,
+
+        callback: Box<dyn FnMut(ScrollEvent)>,
+    }
+    impl Sizable1 for Scrollable {}
+    impl EguiRenderable for Scrollable {}
+    impl Component1 for Scrollable {
+        fn get_component<'a>(&'a mut self) -> &'a mut Component {
+            &mut self.component
+        }
+    }
+    struct ScrollEvent {
+        amount: Vector<2, f32>,
     }
     struct Color {}
     struct Text {
@@ -74,7 +203,7 @@ mod retained_ui {
         // consider capture/bubble options
     }
     struct MouseEvent {
-        pos: util::Vector<2, f32>,
+        pos: Vector<2, f32>,
         buttons: ClickableMask,
     }
     struct FocusEvent {
@@ -86,7 +215,7 @@ mod retained_ui {
     }
     struct ListItem {
         size: ListItemSize,
-        item: Box<dyn Component>,
+        item: Rc<RefCell<dyn Component1>>,
     }
     enum ListItemSize {
         Fill,
@@ -102,7 +231,7 @@ mod util {
     use std::ops::AddAssign;
 
     pub struct Vector<const N: usize, T> {
-        items: [T; N],
+        pub items: [T; N],
     }
     impl<const N: usize, T: AddAssign + Copy> AddAssign for Vector<N, T> {
         fn add_assign(&mut self, rhs: Self) {
