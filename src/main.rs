@@ -90,12 +90,28 @@ mod retained_ui {
 
     struct Component {
         parent: Option<Weak<RefCell<dyn Component1>>>,
+
+        want_resize: bool,
+        want_rerender: bool,
     }
     impl Component {
         fn new() -> Component {
-            Component { parent: None }
+            Component {
+                parent: None,
+                want_resize: true,
+                want_rerender: true,
+            }
         }
         fn request_resize(&mut self) -> () {
+            self.want_resize = true;
+            if let Some(parent_weak) = &self.parent {
+                if let Some(parent) = parent_weak.upgrade() {
+                    parent.borrow_mut().get_component().request_resize();
+                }
+            }
+        }
+        fn request_rerender(&mut self) -> () {
+            self.want_rerender = true;
             if let Some(parent_weak) = &self.parent {
                 if let Some(parent) = parent_weak.upgrade() {
                     parent.borrow_mut().get_component().request_resize();
@@ -120,6 +136,7 @@ mod retained_ui {
         }
         fn add_item(&mut self, size: ListItemSize, item: Rc<RefCell<dyn Component1>>) {
             self.items.push(ListItem { size, item });
+            self.get_component().request_resize();
         }
     }
     impl Sizable1 for HVList {}
