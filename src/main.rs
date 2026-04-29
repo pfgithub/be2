@@ -89,9 +89,9 @@ mod retained_ui {
 
         #[test]
         fn test_one() -> () {
-            let root = HVList::new(HV::V);
+            let root = HVList::new(Axis2::Y);
             root.borrow_mut()
-                .add_item(ListItemSize::Fit, HVList::new(HV::H));
+                .add_item(ListItemSize::Fit, HVList::new(Axis2::X));
             root.borrow_mut().size(ComponentParentSize {
                 size: Vector::<2, Option<f32>> {
                     items: [Some(1.0), Some(2.0)],
@@ -121,6 +121,7 @@ mod retained_ui {
         fn get_component<'a>(&'a mut self) -> &'a mut Component;
     }
 
+    #[derive(Copy, Clone)]
     struct ComponentParentSize {
         size: Vector<2, Option<f32>>,
     }
@@ -163,11 +164,11 @@ mod retained_ui {
     struct HVList {
         component: Component,
 
-        direction: HV,
+        direction: Axis2, // it should be called axis or otherwise it should have all four directions (right, down, left, up)
         items: Vec<ListItem>,
     }
     impl HVList {
-        fn new(direction: HV) -> Rc<RefCell<HVList>> {
+        fn new(direction: Axis2) -> Rc<RefCell<HVList>> {
             Rc::new(RefCell::new(HVList {
                 component: Component::new(),
                 direction,
@@ -179,7 +180,69 @@ mod retained_ui {
             self.get_component().request_resize();
         }
     }
-    impl Sizable1 for HVList {}
+    impl Sizable1 for HVList {
+        fn size(&mut self, parent_size: ComponentParentSize) -> ComponentResolvedSize {
+            // require on the non-main axis
+            assert_ne!(parent_size.size[self.direction.inverse()], None);
+
+            // 1. size Fit items
+            let mut taken: f32 = 0.0;
+            let mut fill_count: f32 = 0.0;
+            let mut have_fill = false;
+            for item in &self.items {
+                match item.size {
+                    ListItemSize::Fit => {
+                        let resolved = item.item.borrow_mut().size(parent_size);
+                        taken += resolved.size[self.direction];
+                    }
+                    ListItemSize::Fill(portion) => {
+                        fill_count += portion;
+                        have_fill = true;
+                    }
+                }
+            }
+            // 2. size Fill items in remaining space (assert parent_size[axis] is defined)
+            if have_fill {
+                if let Some(total) = parent_size.size[self.direction] {
+                    let remaining = total - taken;
+                    let divided = remaining / fill_count;
+                    for item in &self.items {
+                        match item.size {
+                            ListItemSize::Fit => {}
+                            ListItemSize::Fill(portion) => {
+                                let self_size = divided / portion;
+                                // to be pixel perfect, we can make the vars mut and then subtract from them each iteration
+                                // that way we can always round up
+                                let mut rsize = parent_size;
+                                rsize.size[self.direction] = Some(self_size);
+                                let _resolved = item.item.borrow_mut().size(rsize);
+                            }
+                        }
+                    }
+                    ComponentResolvedSize {
+                        size: Vector::<2, f32>::from_main_other(
+                            self.direction,
+                            parent_size.size[self.direction].expect("oops"),
+                            parent_size.size[self.direction.inverse()].expect("oops"),
+                        ),
+                    }
+                } else {
+                    panic!(
+                        "not allowed ListItemSize::Fill inside container that does not specify maximum size"
+                    );
+                    // TODO: would be nice to enforce this via component types (eg sized1 vs sized2)
+                }
+            } else {
+                ComponentResolvedSize {
+                    size: Vector::<2, f32>::from_main_other(
+                        self.direction,
+                        taken,
+                        parent_size.size[self.direction.inverse()].expect("oops"),
+                    ),
+                }
+            }
+        }
+    }
     impl EguiRenderable for HVList {}
     impl Component1 for HVList {
         fn get_component<'a>(&'a mut self) -> &'a mut Component {
@@ -275,18 +338,30 @@ mod retained_ui {
         item: Rc<RefCell<dyn Component1>>,
     }
     enum ListItemSize {
-        Fill,
+        Fill(f32),
         Fit,
-    }
-    enum HV {
-        H,
-        V,
     }
 }
 
 mod util {
-    use std::ops::AddAssign;
+    use std::ops::{AddAssign, Index, IndexMut};
 
+    #[derive(Copy, Clone)]
+    pub enum Axis2 {
+        X = 0,
+        Y = 1,
+    }
+    impl Axis2 {
+        pub fn inverse(self) -> Axis2 {
+            // mod((self as usize) + 1, 2)
+            match self {
+                Axis2::X => Axis2::Y,
+                Axis2::Y => Axis2::X,
+            }
+        }
+    }
+
+    #[derive(Copy, Clone)]
     pub struct Vector<const N: usize, T> {
         pub items: [T; N],
     }
@@ -295,6 +370,29 @@ mod util {
             for i in 0..N {
                 self.items[i] += rhs.items[i];
             }
+        }
+    }
+    impl<T: Copy> Vector<2, T> {
+        pub fn from_main_other(axis: Axis2, main: T, other: T) -> Vector<2, T> {
+            match axis {
+                Axis2::X => Vector::<2, T> {
+                    items: [main, other],
+                },
+                Axis2::Y => Vector::<2, T> {
+                    items: [other, main],
+                },
+            }
+        }
+    }
+    impl<T: Copy> Index<Axis2> for Vector<2, T> {
+        type Output = T;
+        fn index(&self, axis: Axis2) -> &Self::Output {
+            &self.items[axis as usize]
+        }
+    }
+    impl<T: Copy> IndexMut<Axis2> for Vector<2, T> {
+        fn index_mut(&mut self, axis: Axis2) -> &mut Self::Output {
+            &mut self.items[axis as usize]
         }
     }
 }
