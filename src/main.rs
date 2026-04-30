@@ -2,6 +2,19 @@ fn main() {
     println!("Hello, world!");
 }
 
+mod component {
+    struct ComponentDB {
+        descriptor: &'static ComponentDBDescriptor,
+    }
+    struct ComponentDBDescriptor {}
+
+    // table operations: splice, move
+    //   splice (start, delete_count, insert_items)
+    //   move (src, len, dst)
+    // multiple operations can always be combined into one
+    // an editable string is just a string table that you operate on with splice and move
+}
+
 mod reactive {
     use std::{hash::Hash, ops::Deref};
 
