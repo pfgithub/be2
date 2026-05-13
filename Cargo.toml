@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 rustybuzz = "*"
+eframe = "0.34.2"

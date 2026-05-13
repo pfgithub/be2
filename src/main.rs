@@ -1,5 +1,124 @@
-fn main() {
-    println!("Hello, world!");
+use eframe::egui;
+fn main() -> std::result::Result<(), eframe::Error> {
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "My egui App",
+        native_options,
+        Box::new(|cc| Ok(Box::new(be2_eframe::MyEguiApp::new(cc)))),
+    )
+}
+
+mod be2_eframe {
+    use super::*;
+    use retained_ui::*;
+    use std::any::{Any, TypeId};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+    use util::*;
+
+    pub struct MyEguiApp {
+        root: Rc<RefCell<dyn Component1>>,
+    }
+
+    pub trait EguiRenderable {
+        fn render(&mut self, ui: &mut eframe::egui::Ui) -> () {}
+    }
+
+    impl EguiRenderable for HVList {}
+    impl EguiRenderable for ZStack {}
+    impl EguiRenderable for Clickable {}
+    impl EguiRenderable for Focusable {}
+    impl EguiRenderable for Scrollable {}
+    impl EguiRenderable for Text {
+        fn render(&mut self, ui: &mut eframe::egui::Ui) -> () {
+            ui.heading(self.message.clone());
+        }
+    }
+
+    // we don't really need it to be traits in this case. we can register render functions themselves
+    // probably would save a level of indirection
+    type RenderCaster = fn(&mut dyn Any) -> Option<&mut dyn EguiRenderable>;
+    pub struct EguiRenderableRegistry {
+        casters: HashMap<TypeId, RenderCaster>,
+    }
+    impl EguiRenderableRegistry {
+        pub fn new() -> Self {
+            Self {
+                casters: HashMap::<TypeId, RenderCaster>::new(),
+            }
+        }
+        pub fn register<T: EguiRenderable + Any>(&mut self) {
+            self.casters.insert(TypeId::of::<T>(), |any| {
+                any.downcast_mut::<T>()
+                    .map(|c| c as &mut dyn EguiRenderable)
+            });
+        }
+
+        pub fn resolve<'a>(
+            &self,
+            comp: &'a mut dyn Component1,
+        ) -> Option<&'a mut dyn EguiRenderable> {
+            self.casters
+                .get(&comp.as_any().type_id())
+                .and_then(|caster| caster(comp.as_any_mut()))
+        }
+    }
+
+    impl From<eframe::egui::Vec2> for Vector<2, f32> {
+        fn from(value: eframe::egui::Vec2) -> Self {
+            Self::from_main_other(Axis2::X, value.x, value.y)
+        }
+    }
+    impl From<eframe::egui::Vec2> for Vector<2, Option<f32>> {
+        fn from(value: eframe::egui::Vec2) -> Self {
+            Self::from_main_other(Axis2::X, Some(value.x), Some(value.y))
+        }
+    }
+
+    impl MyEguiApp {
+        pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+            // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_global_style.
+            // Restore app state using cc.storage (requires the "persistence" feature).
+            // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
+            // for e.g. egui::PaintCallback.
+
+            // let root = HVList::new(
+            //     Axis2::Y,
+            //     vec![ListItem {
+            //         size: ListItemSize::Fit,
+            //         item: HVList::new(Axis2::X, vec![]),
+            //     }],
+            // );
+            let root = Text::new("abc".to_string());
+
+            Self { root }
+        }
+    }
+
+    impl eframe::App for MyEguiApp {
+        fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                let avails = ui.available_size();
+
+                let mut root = self.root.borrow_mut();
+                root.size(ComponentParentSize {
+                    size: avails.into(),
+                });
+
+                let mut registry = EguiRenderableRegistry::new();
+                registry.register::<HVList>();
+                registry.register::<ZStack>();
+                registry.register::<Clickable>();
+                registry.register::<Focusable>();
+                registry.register::<Scrollable>();
+                registry.register::<Text>();
+                if let Some(renderable) = registry.resolve(&mut *root) {
+                    renderable.render(ui);
+                }
+            });
+        }
+    }
 }
 
 mod component {
@@ -102,15 +221,19 @@ mod retained_ui {
 
         #[test]
         fn test_one() -> () {
-            let root = HVList::new(Axis2::Y);
-            root.borrow_mut()
-                .add_item(ListItemSize::Fit, HVList::new(Axis2::X));
+            let root = HVList::new(
+                Axis2::Y,
+                vec![ListItem {
+                    size: ListItemSize::Fit,
+                    item: HVList::new(Axis2::X, vec![]),
+                }],
+            );
             root.borrow_mut().size(ComponentParentSize {
                 size: Vector::<2, Option<f32>> {
                     items: [Some(1.0), Some(2.0)],
                 },
             });
-            root.borrow_mut().render();
+            // root.borrow_mut().render();
         }
     }
     // button component:
@@ -122,27 +245,26 @@ mod retained_ui {
 
     // a component sized with the parent specifying the container boundary sizes
     // we could have others for one where it needs to know its size eg
-    trait Sizable1 {
+    pub trait Sizable1 {
         fn size(&mut self, parent_size: ComponentParentSize) -> ComponentResolvedSize {
             todo!();
         }
     }
-    trait EguiRenderable {
-        fn render(&mut self) -> () {}
-    }
-    trait Component1: Sizable1 + EguiRenderable {
+    pub trait Component1: Sizable1 {
         fn get_component<'a>(&'a mut self) -> &'a mut Component;
+        fn as_any(&self) -> &dyn std::any::Any;
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
     }
 
     #[derive(Copy, Clone)]
-    struct ComponentParentSize {
-        size: Vector<2, Option<f32>>,
+    pub struct ComponentParentSize {
+        pub size: Vector<2, Option<f32>>, // alternatively, use 'infinity' for f32
     }
-    struct ComponentResolvedSize {
-        size: Vector<2, f32>,
+    pub struct ComponentResolvedSize {
+        pub size: Vector<2, f32>,
     }
 
-    struct Component {
+    pub struct Component {
         parent: Option<Weak<RefCell<dyn Component1>>>,
 
         want_resize: bool,
@@ -174,22 +296,65 @@ mod retained_ui {
         }
     }
 
-    struct HVList {
+    pub struct Text {
+        component: Component,
+        pub message: String,
+    }
+    impl Text {
+        pub fn new(message: String) -> Rc<RefCell<Text>> {
+            Rc::new(RefCell::new(Text {
+                component: Component::new(),
+                message,
+            }))
+        }
+        pub fn set_text(self: &mut Text, message: String) -> () {
+            self.message = message;
+            self.get_component().request_resize();
+        }
+    }
+    impl Sizable1 for Text {
+        fn size(&mut self, parent_size: ComponentParentSize) -> ComponentResolvedSize {
+            // TODO:
+            // - hb layout
+            // - word wrap
+            // - etc
+            ComponentResolvedSize {
+                size: Vector::<2, f32>::from_main_other(
+                    Axis2::X,
+                    (self.message.len() as f32) * 5.0,
+                    20.0,
+                ),
+            }
+        }
+    }
+    impl Component1 for Text {
+        fn get_component<'a>(&'a mut self) -> &'a mut Component {
+            &mut self.component
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    pub struct HVList {
         component: Component,
 
         direction: Axis2, // it should be called axis or otherwise it should have all four directions (right, down, left, up)
         items: Vec<ListItem>,
     }
     impl HVList {
-        fn new(direction: Axis2) -> Rc<RefCell<HVList>> {
+        pub fn new(direction: Axis2, children: Vec<ListItem>) -> Rc<RefCell<HVList>> {
             Rc::new(RefCell::new(HVList {
                 component: Component::new(),
                 direction,
-                items: vec![],
+                items: children,
             }))
         }
-        fn add_item(&mut self, size: ListItemSize, item: Rc<RefCell<dyn Component1>>) {
-            self.items.push(ListItem { size, item });
+        pub fn add_item(&mut self, item: ListItem) {
+            self.items.push(item);
             self.get_component().request_resize();
         }
     }
@@ -256,35 +421,45 @@ mod retained_ui {
             }
         }
     }
-    impl EguiRenderable for HVList {}
     impl Component1 for HVList {
         fn get_component<'a>(&'a mut self) -> &'a mut Component {
             &mut self.component
         }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
-    struct ZStack {
+    pub struct ZStack {
         component: Component,
 
         items: Vec<ZStackItem>,
     }
     impl Sizable1 for ZStack {}
-    impl EguiRenderable for ZStack {}
     impl Component1 for ZStack {
         fn get_component<'a>(&'a mut self) -> &'a mut Component {
             &mut self.component
         }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
-    struct ZStackItem {
+    pub struct ZStackItem {
         component: Component,
 
         value: Rc<RefCell<dyn Component1>>,
         sizing: ZStackItemSizing,
     }
-    enum ZStackItemSizing {
+    pub enum ZStackItemSizing {
         Leader,
         Follower,
     }
-    struct Clickable {
+    pub struct Clickable {
         component: Component,
 
         // takes up the full size. use a vstack.
@@ -292,65 +467,77 @@ mod retained_ui {
         callback: Box<dyn FnMut(MouseEvent)>,
     }
     impl Sizable1 for Clickable {}
-    impl EguiRenderable for Clickable {}
     impl Component1 for Clickable {
         fn get_component<'a>(&'a mut self) -> &'a mut Component {
             &mut self.component
         }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
-    struct Focusable {
+    pub struct Focusable {
         component: Component,
 
         callback: Box<dyn FnMut(FocusEvent)>,
     }
     impl Sizable1 for Focusable {}
-    impl EguiRenderable for Focusable {}
     impl Component1 for Focusable {
         fn get_component<'a>(&'a mut self) -> &'a mut Component {
             &mut self.component
         }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
-    struct Scrollable {
+    pub struct Scrollable {
         component: Component,
 
         callback: Box<dyn FnMut(ScrollEvent)>,
     }
     impl Sizable1 for Scrollable {}
-    impl EguiRenderable for Scrollable {}
     impl Component1 for Scrollable {
         fn get_component<'a>(&'a mut self) -> &'a mut Component {
             &mut self.component
         }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
     }
-    struct ScrollEvent {
+    pub struct ScrollEvent {
         amount: Vector<2, f32>,
     }
-    struct Color {}
-    struct Text {
-        msg: String,
-    }
-    struct ClickableMask {
+    pub struct Color {}
+    pub struct ClickableMask {
         left: bool,
         middle: bool,
         right: bool,
         // consider capture/bubble options
     }
-    struct MouseEvent {
+    pub struct MouseEvent {
         pos: Vector<2, f32>,
         buttons: ClickableMask,
     }
-    struct FocusEvent {
+    pub struct FocusEvent {
         mode: FocusEventMode,
     }
-    enum FocusEventMode {
+    pub enum FocusEventMode {
         Enter,
         Leave,
     }
-    struct ListItem {
-        size: ListItemSize,
-        item: Rc<RefCell<dyn Component1>>,
+    pub struct ListItem {
+        pub size: ListItemSize,
+        pub item: Rc<RefCell<dyn Component1>>,
     }
-    enum ListItemSize {
+    pub enum ListItemSize {
         Fill(f32),
         Fit,
     }
