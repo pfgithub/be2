@@ -667,6 +667,15 @@ mod blocks {
     mod server {
         use super::*;
     }
+
+    // some basic block types:
+    // - lockable:
+    //   - you can lock and unlock it. this is for anything not integrated with the block system, ie blender or excalidraw
+    //     - for excalidraw, when you lock the file you can have the ability to request starting a live collaboration session
+    //     - so someone who opens the file will post a 'request_live_collaboration' update to the block and then get back
+    //       a 'live_collaboration_session' response with a url. then their client will connect.
+    //  - when offline these will need a warning because in bad-network or offline it's pretty easy to have two people lock
+    //    the same file at once. resolving is a "choose which one to keep" which sucks.
 }
 
 mod util {
