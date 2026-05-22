@@ -582,8 +582,7 @@ mod blocks {
         format: BlockID, // this has format: BlockID::format_component1()
         data: Vec<u8>,
         refs: Vec<BlockID>,
-        presence: Vec<u8>,
-        presence_sessions: Vec<BlockID>, // these have format: BlockID::format_session1()
+        presence: Vec<BlockID>, // these have format: BlockID::format_session1()
     }
 
     pub enum Request {
