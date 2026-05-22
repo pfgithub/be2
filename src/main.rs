@@ -567,17 +567,23 @@ mod blocks {
         value: u128,
     }
     impl BlockID {
-        fn component1() -> BlockID {
-            return BlockID {
-                value: 0x887cad84_a455_4a62_8f73_5d766e702364,
-            };
+        fn uuid(u: u128) -> BlockID {
+            BlockID { value: u }
+        }
+        fn format_component1() -> BlockID {
+            BlockID::uuid(0x887cad84_a455_4a62_8f73_5d766e702364)
+        }
+        fn format_session1() -> BlockID {
+            BlockID::uuid(0xc1d01fa8_50fe_4297_8bec_1a9ed2a826b4)
         }
     }
     pub struct Block {
         uuid: BlockID,
-        format: BlockID,
+        format: BlockID, // this has format: BlockID::format_component1()
         data: Vec<u8>,
         refs: Vec<BlockID>,
+        presence: Vec<u8>,
+        presence_sessions: Vec<BlockID>, // these have format: BlockID::format_session1()
     }
 
     pub enum Request {
@@ -587,6 +593,7 @@ mod blocks {
         Update(RequestUpdate),
         History(RequestHistory),
         SubmitSnapshot(RequestSubmitSnapshot),
+        BroadcastPresence(RequestBroadcastPresence),
     }
     pub struct RequestRead {
         uuid: BlockID,
@@ -619,6 +626,10 @@ mod blocks {
         update_number: u64,
         data: Vec<u8>,
     }
+    pub struct RequestBroadcastPresence {
+        uuid: BlockID,
+        data: Vec<u8>,
+    }
 
     pub enum Response {
         Create(ResponseCreateBlock),
@@ -639,11 +650,17 @@ mod blocks {
         format: BlockID,
         data: Vec<u8>,
         data_total_len: u64,
+
+        presence: Vec<u8>,
     }
     pub struct ResponseUpdate {
         uuid: BlockID,
         update_number: u64,
 
+        update: Vec<u8>,
+    }
+    pub struct ResponseBroadcastPresence {
+        uuid: BlockID,
         update: Vec<u8>,
     }
 
@@ -666,6 +683,54 @@ mod blocks {
     }
     mod server {
         use super::*;
+    }
+
+    mod block_types {
+        use super::*;
+        // excalidraw
+        mod lockable {
+            use super::*;
+
+            fn format_lockable1() -> BlockID {
+                BlockID::uuid(0x40b882fd_8e5d_47cf_a462_70ab3f99865b)
+            }
+
+            pub struct Lockable1 {
+                // offline:
+                // - warn when offline for lockables, or when going from online to offline
+                // excalidraw usage example:
+                // - the format field will be for a specific version of excalidraw. it will reference blocks containing the files of that version of excalidraw.
+                // - if owned: if session: connect to the session. else: request a session
+                // - not owned: set owned
+                // blender usage example:
+                // - if owned: warn about session stealing. use RequestSession as a soft takeover request
+                // - not owned: set owned
+                // video game usage example:
+                // - the format field will say the game & version. maybe it can also reference blocks containing the game data in some cases.
+                // - if owned: is the game multiplayer? join the game. else: prompt to request takeover
+                // - not owned: set owned
+                format: BlockID, // since this contains opaque data, we need to know the format again (.format lockable -> .format excalidraw -> data)
+                data: Vec<u8>,   // structure is determined by the Lockable.format
+            }
+            pub enum Lockable1Update {
+                Patch(Lockable1UpdatePatch),
+            }
+            struct Lockable1UpdatePatch {
+                offset: u64,
+                data: Vec<u8>,
+            }
+
+            pub enum Lockable1Presence {
+                AnnounceOwnership(Lockable1PresenceAnnounceOwnership),
+                RequestSession(Lockable1PresenceRequestSession), // ask for a session to be created, or when that can't be done, ask for the file to be unlocked
+                AnnounceSession(Lockable1PresenceAnnounceSession), // we are the owner and someone asked for a session. it will take a moment for the session to start, let them know we're online.
+            }
+            struct Lockable1PresenceAnnounceOwnership {}
+            struct Lockable1PresenceRequestSession {}
+            struct Lockable1PresenceAnnounceSession {
+                session: Vec<u8>,
+            }
+        }
     }
 
     // some basic block types:
