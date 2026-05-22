@@ -543,6 +543,132 @@ mod retained_ui {
     }
 }
 
+mod blocks {
+    use eframe::egui::accesskit::Uuid;
+
+    use super::*;
+    // server:
+    // requests:
+    // - read_and_watch(uuid) -> {data: []const u8, refs: []uuid}
+    // replies:
+    // - full_contents (uuid, data, refs)
+    // -
+
+    // what is a block?
+    // - a block has a uuid, a format uuid, and data Vec<u8>
+    // - you can submit updates to a block by sending an update request
+    //   - the format field defines how this is applied
+    //   - if you try to submit an update with an update number <= the server's update number, your update will be rejected and needs to be resent
+    //     - your client needs to rebase the updates
+    //   - TODO: be able to determine if an update has already been applied so if you send an update and never get a response, you won't send it again except in exceptional cases
+    // - you receive updates
+
+    pub struct BlockID {
+        value: u128,
+    }
+    impl BlockID {
+        fn component1() -> BlockID {
+            return BlockID {
+                value: 0x887cad84_a455_4a62_8f73_5d766e702364,
+            };
+        }
+    }
+    pub struct Block {
+        uuid: BlockID,
+        format: BlockID,
+        data: Vec<u8>,
+        refs: Vec<BlockID>,
+    }
+
+    pub enum Request {
+        Read(RequestRead),
+        Unwatch(RequestUnwatch),
+        Create(RequestCreate),
+        Update(RequestUpdate),
+        History(RequestHistory),
+        SubmitSnapshot(RequestSubmitSnapshot),
+    }
+    pub struct RequestRead {
+        uuid: BlockID,
+
+        data_offset: u64,
+        data_len: u64,
+        watch: bool,
+    }
+    pub struct RequestUnwatch {
+        uuid: BlockID,
+    }
+    pub struct RequestCreate {
+        uuid: BlockID,
+
+        format: BlockID,
+        data: Vec<u8>,
+    }
+    pub struct RequestUpdate {
+        uuid: BlockID,
+        update_number: u64,
+        update: Vec<u8>,
+    }
+    pub struct RequestHistory {
+        uuid: BlockID,
+        start_update_number: u64,
+        len: u64,
+    }
+    pub struct RequestSubmitSnapshot {
+        uuid: BlockID,
+        update_number: u64,
+        data: Vec<u8>,
+    }
+
+    pub enum Response {
+        Create(ResponseCreateBlock),
+        Read(ResponseReadBlock),
+        Update(ResponseUpdate),
+    }
+    pub struct ResponseError {
+        message: String,
+    }
+    pub struct ResponseCreateBlock {
+        uuid: BlockID,
+        status: Result<(), ResponseError>,
+    }
+    pub struct ResponseReadBlock {
+        uuid: BlockID,
+        update_number: u64,
+
+        format: BlockID,
+        data: Vec<u8>,
+        data_total_len: u64,
+    }
+    pub struct ResponseUpdate {
+        uuid: BlockID,
+        update_number: u64,
+
+        update: Vec<u8>,
+    }
+
+    mod client {
+        use super::*;
+
+        struct BlocksClient {}
+        impl BlocksClient {
+            // new() -> BlocksClient
+            // connect()
+            // - watch any server blocks we have
+            // - upload any new blocks we created
+            // - upload any unapplied updates we have
+            // - if their update numbers are past ours, we will need to read history
+            // disconnect()
+            // observable connectionStatus
+            //
+            // createBlock(type: uuid) -> uuid
+        }
+    }
+    mod server {
+        use super::*;
+    }
+}
+
 mod util {
     use std::ops::{AddAssign, Index, IndexMut};
 
