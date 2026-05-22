@@ -1,4 +1,5 @@
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 fn main() -> std::result::Result<(), eframe::Error> {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
@@ -544,8 +545,6 @@ mod retained_ui {
 }
 
 mod blocks {
-    use eframe::egui::accesskit::Uuid;
-
     use super::*;
     // server:
     // requests:
@@ -563,8 +562,14 @@ mod blocks {
     //   - TODO: be able to determine if an update has already been applied so if you send an update and never get a response, you won't send it again except in exceptional cases
     // - you receive updates
 
+    #[derive(Serialize, Deserialize, Copy, Clone, Eq, PartialEq, Hash)]
     pub struct BlockID {
         value: u128,
+    }
+    impl std::fmt::Display for BlockID {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "0x{:#x}", self.value)
+        }
     }
     impl BlockID {
         fn uuid(u: u128) -> BlockID {
@@ -585,6 +590,7 @@ mod blocks {
         presence: Vec<BlockID>, // these have format: BlockID::format_session1()
     }
 
+    #[derive(Serialize, Deserialize, Clone)]
     pub enum Request {
         Read(RequestRead),
         Unwatch(RequestUnwatch),
@@ -593,7 +599,9 @@ mod blocks {
         History(RequestHistory),
         SubmitSnapshot(RequestSubmitSnapshot),
         BroadcastPresence(RequestBroadcastPresence),
+        // TODO: migrating a block from one data format to another
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct RequestRead {
         uuid: BlockID,
 
@@ -601,47 +609,54 @@ mod blocks {
         data_len: u64,
         watch: bool,
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct RequestUnwatch {
         uuid: BlockID,
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct RequestCreate {
         uuid: BlockID,
 
         format: BlockID,
         data: Vec<u8>,
+        watch: bool,
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct RequestUpdate {
         uuid: BlockID,
         update_number: u64,
         update: Vec<u8>,
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct RequestHistory {
         uuid: BlockID,
         start_update_number: u64,
         len: u64,
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct RequestSubmitSnapshot {
         uuid: BlockID,
         update_number: u64,
         data: Vec<u8>,
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct RequestBroadcastPresence {
         uuid: BlockID,
         data: Vec<u8>,
     }
 
+    #[derive(Serialize, Deserialize, Clone)]
     pub enum Response {
-        Create(ResponseCreateBlock),
         Read(ResponseReadBlock),
         Update(ResponseUpdate),
+        Broadcast(ResponseBroadcast),
+        Error(String), // the connection will be closed after sending an error message
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct ResponseError {
         message: String,
     }
-    pub struct ResponseCreateBlock {
-        uuid: BlockID,
-        status: Result<(), ResponseError>,
-    }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct ResponseReadBlock {
         uuid: BlockID,
         update_number: u64,
@@ -652,12 +667,20 @@ mod blocks {
 
         presence: Vec<u8>,
     }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct ResponseUpdate {
         uuid: BlockID,
         update_number: u64,
 
         update: Vec<u8>,
     }
+    #[derive(Serialize, Deserialize, Clone)]
+    pub struct ResponseBroadcast {
+        uuid: BlockID,
+        sender: BlockID,
+        message: Vec<u8>,
+    }
+    #[derive(Serialize, Deserialize, Clone)]
     pub struct ResponseBroadcastPresence {
         uuid: BlockID,
         update: Vec<u8>,
@@ -681,7 +704,161 @@ mod blocks {
         }
     }
     mod server {
+        use std::collections::HashMap;
+        use std::collections::VecDeque;
+
         use super::*;
+
+        struct Server {
+            rooms: HashMap<BlockID, Room>, // map from block
+            recieve_queue: VecDeque<ReceiveMessage>,
+            send_queue: VecDeque<SendMessage>,
+        }
+        impl Server {
+            #[inline(always)]
+            fn send(&mut self, dst: BlockID, msg: &Response) -> () {
+                let stringified =
+                    serde_json::to_vec(msg).expect("constructed an unstringifiable response TODO");
+                self.send_queue.push_back(SendMessage {
+                    destination: dst,
+                    text: stringified.clone(),
+                    close_connection: matches!(msg, Response::Error(_)),
+                });
+            }
+            fn broadcast(&mut self, dst_block: BlockID, msg: &Response) -> () {
+                let Some(room) = self.rooms.get_mut(&dst_block) else {
+                    tracing::warn! {
+                        %dst_block,
+                        "failed to broadcast to room"
+                    };
+                    return;
+                };
+                let stringified =
+                    serde_json::to_vec(msg).expect("constructed an unstringifiable response TODO");
+                for itm in &room.clients[..] {
+                    self.send_queue.push_back(SendMessage {
+                        destination: *itm,
+                        text: stringified.clone(),
+                        close_connection: matches!(msg, Response::Error(_)),
+                    });
+                }
+            }
+            fn close(&mut self, dst: BlockID, msg: String) -> () {
+                self.send(dst, &Response::Error(msg));
+            }
+            fn tick(&mut self) -> () {
+                let Some(recv) = self.recieve_queue.pop_front() else {
+                    return;
+                };
+                let Ok(parsed) = serde_json::from_slice::<Request>(&recv.text[..]) else {
+                    self.close(recv.source, "Parsing failed".to_string());
+                    return;
+                };
+                match &parsed {
+                    Request::Read(req) => {
+                        // 1. read the data
+                        // 2. based on req, maybe start the client watching the block
+                        // 3. send a ResponseReadBlock back to the client with the results
+                    }
+                    Request::Create(req) => {
+                        // 1. save the created block. failure modes:
+                        //     - the uuid already exists: return a create uuid already exists response
+                        //     - the block failed to save: unclear
+                        // 2. based on req, maybe start the client watching the block
+                        // 3. send a ResponseReadBlock back to the client with offset 0 len 0
+                    }
+                    Request::Update(req) => {
+                        // 1. save the update. failure modes:
+                        //     - the update is already saved: return an update duplicate response
+                        //     - the current update # is >= the new update #: return an update fail response
+                        //     - the update failed to save: unclear. drop the client & print a warning?
+                        // 2. broadcast the update to the room for that block uuid.
+                    }
+                    Request::History(req) => {}        // todo
+                    Request::SubmitSnapshot(req) => {} // todo
+                    Request::Unwatch(req) => {}        // todo
+                    Request::BroadcastPresence(req) => {
+                        let fail_msg = "Cannot broadcast to a room that you are not in";
+                        let Some(room) = self.rooms.get_mut(&req.uuid) else {
+                            self.close(recv.source, fail_msg.to_string());
+                            return;
+                        };
+                        if !room.clients.contains(&recv.source) {
+                            self.close(recv.source, fail_msg.to_string());
+                            return;
+                        };
+                        self.broadcast(
+                            req.uuid,
+                            &Response::Broadcast(ResponseBroadcast {
+                                uuid: req.uuid,
+                                sender: recv.source,
+                                message: req.data.clone(),
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+        struct ReceiveMessage {
+            source: BlockID,
+            text: Vec<u8>,
+        }
+        struct SendMessage {
+            destination: BlockID,
+            text: Vec<u8>,
+            close_connection: bool,
+        }
+        struct Room {
+            clients: Vec<BlockID>, // client ids
+        }
+
+        mod io {
+            use futures_util::{SinkExt, StreamExt};
+            use tokio::net::TcpListener;
+            use tokio::sync::broadcast;
+            use tokio_tungstenite::accept_async;
+            use tokio_tungstenite::tungstenite::Message;
+
+            #[tokio::main]
+            async fn main() -> Result<(), Box<dyn std::error::Error>> {
+                let subscriber = tracing_subscriber::FmtSubscriber::new();
+                tracing::subscriber::set_global_default(subscriber)?;
+
+                let listener = TcpListener::bind("127.0.0.1:8080").await?;
+                let (tx, _) = broadcast::channel::<String>(256);
+                eprintln!("listening on 127.0.0.1:8080");
+
+                loop {
+                    let (stream, addr) = listener.accept().await?;
+                    let tx = tx.clone();
+                    let mut rx = tx.subscribe();
+
+                    tokio::spawn(async move {
+                        let Ok(ws) = accept_async(stream).await else {
+                            eprintln!("{addr}: handshake failed");
+                            return;
+                        };
+                        let (mut sink, mut source) = ws.split();
+
+                        let write = tokio::spawn(async move {
+                            while let Ok(msg) = rx.recv().await {
+                                if sink.send(Message::text(msg)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+
+                        while let Some(Ok(msg)) = source.next().await {
+                            if let Message::Text(text) = msg {
+                                let _ = tx.send(text.to_string());
+                            }
+                        }
+                        write.abort();
+                        eprintln!("{addr} disconnected");
+                    });
+                }
+            }
+        }
     }
 
     mod block_types {
