@@ -907,6 +907,14 @@ mod blocks {
                 session: Vec<u8>,
             }
         }
+
+        mod calendar {
+            // the ui for this: it shows a full month (large touchscreen eink) and you can tap a day to add an event.
+            // it highlights the current day and maybe even cries to you (flashing light) if there is an event on the current day until you acknowledge it
+            //
+            // the data model:
+            // CalendarEvent{start: timestamp, end: timestamp, text: string}
+        }
     }
 
     // some basic block types:
