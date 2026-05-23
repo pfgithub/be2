@@ -705,7 +705,9 @@ mod blocks {
     }
     mod server {
         use std::collections::HashMap;
+        use std::collections::HashSet;
         use std::collections::VecDeque;
+        use std::ops::DerefMut;
 
         use super::*;
 
@@ -717,6 +719,7 @@ mod blocks {
         impl Server {
             #[inline(always)]
             fn send(&mut self, dst: BlockID, msg: &Response) -> () {
+                // TODO: this code is duplicated in fn broadcast
                 let stringified =
                     serde_json::to_vec(msg).expect("constructed an unstringifiable response TODO");
                 self.send_queue.push_back(SendMessage {
@@ -733,9 +736,10 @@ mod blocks {
                     };
                     return;
                 };
+                // TODO: this code is duplicated in fn send
                 let stringified =
                     serde_json::to_vec(msg).expect("constructed an unstringifiable response TODO");
-                for itm in &room.clients[..] {
+                for itm in room.clients.iter() {
                     self.send_queue.push_back(SendMessage {
                         destination: *itm,
                         text: stringified.clone(),
@@ -745,6 +749,20 @@ mod blocks {
             }
             fn close(&mut self, dst: BlockID, msg: String) -> () {
                 self.send(dst, &Response::Error(msg));
+            }
+            fn set_subscribed(&mut self, client: BlockID, block: BlockID, value: bool) -> () {
+                let room = self.rooms.entry(block).or_insert_with(|| Room {
+                    clients: Default::default(),
+                });
+                if value {
+                    room.clients.insert(client);
+                } else {
+                    room.clients.remove(&client);
+                }
+                // TODO: also store a mapping of client -> watching[] so we can clean up when the client exits
+                if room.clients.len() == 0 {
+                    self.rooms.remove(&block);
+                }
             }
             fn tick(&mut self) -> () {
                 let Some(recv) = self.recieve_queue.pop_front() else {
@@ -758,6 +776,9 @@ mod blocks {
                     Request::Read(req) => {
                         // 1. read the data
                         // 2. based on req, maybe start the client watching the block
+                        if req.watch {
+                            self.set_subscribed(recv.source, req.uuid, true);
+                        }
                         // 3. send a ResponseReadBlock back to the client with the results
                     }
                     Request::Create(req) => {
@@ -765,6 +786,9 @@ mod blocks {
                         //     - the uuid already exists: return a create uuid already exists response
                         //     - the block failed to save: unclear
                         // 2. based on req, maybe start the client watching the block
+                        if req.watch {
+                            self.set_subscribed(recv.source, req.uuid, true);
+                        }
                         // 3. send a ResponseReadBlock back to the client with offset 0 len 0
                     }
                     Request::Update(req) => {
@@ -774,9 +798,17 @@ mod blocks {
                         //     - the update failed to save: unclear. drop the client & print a warning?
                         // 2. broadcast the update to the room for that block uuid.
                     }
-                    Request::History(req) => {}        // todo
-                    Request::SubmitSnapshot(req) => {} // todo
-                    Request::Unwatch(req) => {}        // todo
+                    Request::History(req) => {
+                        self.close(recv.source, "TODO implement history".to_string());
+                        return;
+                    }
+                    Request::SubmitSnapshot(req) => {
+                        self.close(recv.source, "TODO implement SubmitSnapshot".to_string());
+                        return;
+                    }
+                    Request::Unwatch(req) => {
+                        self.set_subscribed(recv.source, req.uuid, false);
+                    }
                     Request::BroadcastPresence(req) => {
                         let fail_msg = "Cannot broadcast to a room that you are not in";
                         let Some(room) = self.rooms.get_mut(&req.uuid) else {
@@ -809,7 +841,7 @@ mod blocks {
             close_connection: bool,
         }
         struct Room {
-            clients: Vec<BlockID>, // client ids
+            clients: HashSet<BlockID>, // client ids
         }
 
         mod io {
