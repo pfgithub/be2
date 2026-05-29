@@ -711,6 +711,18 @@ mod blocks {
 
         use super::*;
 
+        // data layout
+        // data/
+        //   (workspace)/
+        //     (block)/
+        //       snapshots/
+        //         0.dat
+        //         3.dat
+        //       updatates/
+        //         0.dat
+        //         1.dat
+        //         2.dat
+        //         3.dat
         struct Server {
             rooms: HashMap<BlockID, Room>, // map from block
             recieve_queue: VecDeque<ReceiveMessage>,
